@@ -135,7 +135,7 @@ def compute_alignment_NM(ref_seq, read_seq):
     Computes the edit unit distance of an alignment (ref, read)
     :param: ref_seq, read_seq (str): aligned sequences
     (ref: reference sequence, read: read sequence)
-    :return: int:edit distance
+    :return: int: edit distance
     """
     # CIGAR symbol at every positions
     alg_pos = range(len(read_seq))
@@ -150,10 +150,10 @@ def compute_alignment_NM(ref_seq, read_seq):
 
 def compute_alignment_MD(ref_seq, read_seq):
     """
-    Computes the edit unit distance of an alignment (ref, read)
+    Computes the MD tag string of an alignment (ref, read)
     :param: ref_seq, read_seq (str): aligned sequences
     (ref: reference sequence, read: read sequence)
-    :return: int:edit distance
+    :return: int: MD tag string
     """
     # CIGAR symbol at every positions
     alg_pos = range(len(read_seq))
@@ -164,14 +164,12 @@ def compute_alignment_MD(ref_seq, read_seq):
             current_state = 'match'
         elif read_seq[pos] != GAP and ref_seq[pos] != GAP: # mismatch
             MD += f"{match_counter}{ref_seq[pos]}"
-            match_counter = 0
-            current_state = 'mismatch'
+            match_counter, current_state = 0, 'mismatch'
         elif read_seq[pos] == GAP: # Deletion
             if current_state != 'deletion':
                 MD += f"{match_counter}^"
             MD += ref_seq[pos]
-            match_counter = 0
-            current_state = 'deletion'
+            match_counter, current_state = 0,= 'deletion'
     MD += (str(match_counter) if match_counter > 0 else '')
     return MD
 
