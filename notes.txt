@@ -1,0 +1,64 @@
+1. In the BAM files obtained from BWA, some reads map to another location in the genome.
+e.g.
+M03829:159:000000000-C2P4D:1:1107:26740:18412   81      chr2    101498334       60      137M3S  =       101497784       -687    ...
+is a read from amplicon CG001v3.4.105	TP53:Exon5_part1	TMPLT448	B	chr17	7578344	7578488 mapped to chr2
+The TLEN field has then a value unrelated to the original amplicon.
+This will not happen here as we only maps to the amplicons.
+
+2. By design, we have no supplementary alignments, even when there is hard
+clipping.
+The first alignment in the input text file is considered as the primary
+alignment and the following ones as secondary alignments.
+
+3. FLAG values
+
+unmapped reads: 77/141
+  read paired (0x1)
+  read unmapped (0x4)
+  mate unmapped (0x8)
+  first in pair (0x40) --> forward read
+  second in pair (0x80) --> reverse read
+
+fwd mapped reads: 99/355
+  read paired (0x1)
+  read mapped in proper pair (0x2)
+  mate reverse strand (0x20)
+  first in pair (0x40)
+  not primary alignment (0x100) --> for all but the first alignment
+
+rev mapped: 147/403
+  read paired (0x1)
+  read mapped in proper pair (0x2)
+  read reverse strand (0x10)
+  second in pair (0x80)
+  not primary alignment (0x100) --> for all but the first alignment
+
+4. MAPQ.
+MAPQ is defined in the SAM specification as "-10 log10 Pr {mapping position is
+wrong}, rounded to the nearest integer". So it depends on the position of the
+alignment which is not an issue here due to the fact that reads are aligned on
+the amplicon they originate from and it is enforced the primers do match fully.
+As a consequence, it does not make sense to compute a MAPQ value for the
+mappings in the BAM files. The only quality to consider is the Phred quality of
+the reads.
+
+5. Implementation
+The file bin/alignments_utils.py has been modified from the indels pipeline.
+The modifications are the following:
+- the function compute_alignment_cigar was fixed as it was originally writing
+  the CIGAR string inversing symbols and numbers
+- the symbol for hard-clipping in CIGAR strings has been added to handle the
+  fact that to revert from a merged read to a single read, read-through are
+  considered as hard-clipped;
+- the computation of the expanded CIGAR string has been implemented in a
+  function compute_alignment_expanded_cigar as it is used several times;
+- a function to compute the CIGAR string including the hard-clipped part of a
+  single read has been added: compute_clipped_alignment_cigar;
+- functions specific to SAM format fields have been added:
+  - compute_alignment_NM,
+  - compute_alignment_MD;
+- a function align_single_read has been added to compute the alignment of a
+  single read (forward or reverse) from the alignment of the corresponding
+  merged read.
+
+The file bin/convert_alignments.py has been added. It takes

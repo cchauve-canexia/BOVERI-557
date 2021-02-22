@@ -14,225 +14,20 @@ from Bio import Seq, SeqIO
 from Bio.Sequencing.Applications import SamtoolsViewCommandline
 
 # Local imports
-from bin.alignments_utils import (
+from alignments_utils import (
+    align_single_read,
     AlignmentsSet,
     GAP,
-    get_cigar_symbol,
+    compute_alignment_cigar,
+    compute_clipped_alignment_cigar,
+    compute_alignment_MD,
+    compute_alignment_NM,
 )
 from bin.amplicons_utils import AmpliconsManifest
 from bin.clusters_utils import ClusterReadsSet
 from bin.fastq_utils import phred_to_str
 
-
-def get_reads_info(read_id, fwd_fq_index, rev_fq_index):
-    """
-    Given a read ID and the index of the fowrard reads and reverse reads
-    returns the fowrad read sequence and the reverse complement of the reverse
-    read
-    :param: read_id (str): FASTQ read ID
-    :param: fwd_fq_index, rev_fq_index: indexes for the forward and
-    reverse reads files
-    :return: str, str, str, str: forward read sequence and quality, reverse
-    complement of the reverse read, reverse of the quality of the reverse read
-    """
-    fwd_record = fwd_fq_index[read_id]
-    fwd_seq = fwd_record.seq
-    fwd_qual = phred_to_str(fwd_record.letter_annotations["phred_quality"])
-    rev_record = rev_fq_index[read_id]
-    rev_seq = Seq.reverse_complement(rev_record.seq)
-    rev_qual_int = reversed(rev_record.letter_annotations["phred_quality"])
-    rev_qual = phred_to_str(rev_qual_int)
-    return fwd_seq, fwd_qual, rev_seq, rev_qual
-
-def trim_read_seq(cluster_seq, read_seq, fwd=True):
-    """
-    Separate a read into the part belonging to the merged read used to define
-    the cluster consensus sequence cluster_seq is trimmed.
-    If fwd is True, assumes read_seq is a forward read and the trimmed part is
-    a suffix.
-    If fwd is False, assumes read_seq is the reverse complement of a reverse
-    read and the trimmed part is a prefix.
-    :param: cluster_seq (str): cluster consensus sequence
-    :param: read_seq (str): read sequence
-    :param: fwd (bool): if True, read_sew is assumed to be a forward read
-    otherwise a reverse read.
-    :return: str, str: prefix, suffix of the trimmed read.
-    """
-    cluster_len, read_len = len(cluster_seq), len(read_seq)
-    common_len = min(cluster_len, read_len)
-    if fwd:
-        read_prefix_seq = read_seq[:common_len]
-        read_suffix_seq = read_seq[common_len:]
-    else:
-        read_prefix_seq = read_seq[:- common_len]
-        read_suffix_seq = read_seq[- common_len:]
-    return read_prefix_seq, read_suffix_seq
-
-
-def align_read(alignment, seq_to_align, fwd=True):
-    """
-    Given an alignment and a read  where hard clipped parts have been removed,
-    align the read to the reference sequence
-    :param: alignment (Alignment)
-    :param: seq_to_align (str): aligned part of the read
-    :param: fwd (bool): True if the read is a forward read
-    :assumption: aligned cluster sequence does not start or end with a gap
-    """
-    ref_aligned_seq = alignment.get_amplicon()
-    cluster_aligned_seq = alignment.get_read()
-    alg_len = len(ref_aligned_seq)
-    seq_to_align_len = len(seq_to_align)
-    # Alignment reading parameters: from left to right for forward reads
-    # from right to left for reverse reads
-    if fwd:
-        seq_pos, alg_pos = 0, 0
-        inc_pos, stop_pos = 1, seq_to_align_len
-    else:
-        seq_pos, alg_pos = seq_to_align_len - 1, alg_len - 1
-        inc_pos, stop_pos = -1, -1
-    # Reading the alignment
-    seq_aligned_list = [GAP for pos in range(alg_len)]
-    ref_realigned_list = [GAP for pos in range(alg_len)]
-    while seq_pos != stop_pos:
-        if cluster_aligned_seq[alg_pos] != GAP:
-            seq_aligned_list[alg_pos] = seq_to_align[seq_pos]
-            seq_pos += inc_pos
-        ref_realigned_list[alg_pos] = ref_aligned_seq[alg_pos]
-        alg_pos += inc_pos
-    # Trmming trailing gaps
-    if fwd:
-        seq_aligned = (''.join(seq_aligned_list)).rstrip(GAP)
-        ref_realigned = (''.join(ref_realigned_list)).rstrip(GAP)
-    else:
-        seq_aligned = (''.join(seq_aligned_list)).lstrip(GAP)
-        ref_realigned = (''.join(ref_realigned_list)).lstrip(GAP)
-    return seq_aligned, ref_realigned
-
-
-def compute_alignment_cigar(ref_seq, read_seq):
-    """
-    Computes CIGAR string describing the alignment (ref, read)
-    :param: ref_seq, read_seq (str): aligned sequences
-    (ref: reference sequence, read: read sequence)
-    :return: str: CIGAR string
-    :note: corrected from bin.alignments_utils.py where it incorrectly swaps
-    letters and integers in the CIGAR string
-    """
-    # CIGAR symbol at every positions
-    alg_pos = range(len(read_seq))
-    cigar_expanded = [
-        get_cigar_symbol(ref_seq[pos], read_seq[pos]) for pos in alg_pos
-    ]
-    edit_distance = cigar_expanded.count('X')
-    edit_distance += cigar_expanded.count('D')
-    edit_distance += cigar_expanded.count('I')
-    # Grouping consecutive identical CIGAR sybols
-    cigar = ''.join([f"{len(list(y))}{x}" for x, y in groupby(cigar_expanded)])
-    return cigar
-
-def compute_alignment_NM(ref_seq, read_seq):
-    """
-    Computes the edit unit distance of an alignment (ref, read)
-    :param: ref_seq, read_seq (str): aligned sequences
-    (ref: reference sequence, read: read sequence)
-    :return: int: edit distance
-    """
-    # CIGAR symbol at every positions
-    alg_pos = range(len(read_seq))
-    cigar_expanded = [
-        get_cigar_symbol(ref_seq[pos], read_seq[pos]) for pos in alg_pos
-    ]
-    NM = (
-        cigar_expanded.count('X') + cigar_expanded.count('D') +
-        cigar_expanded.count('I')
-    )
-    return NM
-
-def compute_alignment_MD(ref_seq, read_seq):
-    """
-    Computes the MD tag string of an alignment (ref, read)
-    :param: ref_seq, read_seq (str): aligned sequences
-    (ref: reference sequence, read: read sequence)
-    :return: int: MD tag string
-    """
-    # CIGAR symbol at every positions
-    alg_pos = range(len(read_seq))
-    MD, match_counter, current_state = '', 0, 'start'
-    for pos in alg_pos:
-        if ref_seq[pos] == read_seq[pos]: # match
-            match_counter += 1
-            current_state = 'match'
-        elif read_seq[pos] != GAP and ref_seq[pos] != GAP: # mismatch
-            MD += f"{match_counter}{ref_seq[pos]}"
-            match_counter, current_state = 0, 'mismatch'
-        elif read_seq[pos] == GAP: # Deletion
-            if current_state != 'deletion':
-                MD += f"{match_counter}^"
-            MD += ref_seq[pos]
-            match_counter, current_state = 0,= 'deletion'
-    MD += (str(match_counter) if match_counter > 0 else '')
-    return MD
-
-
-def compute_clipped_alignment_cigar(read_aligned_seq,
-                                    ref_aligned_seq,
-                                    read_clipped_seq,
-                                    fwd=True):
-    """
-    Compute the CIGAR string of an alignment, including the hard-clipped part
-    :param: read_aligned_seq, ref_aligned_seq (str, str): aligned sequences
-    :assumption: both sequences have the same length
-    :param: read_clipped_seq (str): chard-clipped part of read
-    :return (str): CIGAR string
-    """
-    clipped_len = len(read_clipped_seq)
-    clipped_cigar = ('' if clipped_len == 0 else f"{clipped_len}H")
-    if fwd:
-        return (
-            f"{compute_alignment_cigar(ref_aligned_seq, read_aligned_seq)}"
-            f"{clipped_cigar}"
-        )
-    else:
-        return (
-            f"{clipped_cigar}"
-            f"{compute_alignment_cigar(ref_aligned_seq, read_aligned_seq)}"
-        )
-
-def process_read(alignment, cluster_seq, read_seq, read_qual, fwd=True):
-    """ Given a read, an alignment and a cluster consensus sequence, realign
-    the read sequence according to the alignment and returns the aligned
-    sequences and the alignment cigar string.
-    :param: alignment (Alignment): cluster alignment
-    :param: cluster_seq (str): cluster consensus sequence
-    :param: read_seq (str): full read sequence
-    :param: read_qual (str): Phred quality string
-    :param: fwd (bool): True if forward read
-    :return: str, str, str, str: read aligned sequence, read quality over the
-    aligned part, reference realigned sequence, cigar string
-    """
-    read_prefix_seq, read_suffix_seq = trim_read_seq(
-        cluster_seq, read_seq, fwd=fwd
-    )
-    if fwd:
-        read_to_align_seq, read_clipped_seq = read_prefix_seq, read_suffix_seq
-        trimmed_read_qual = read_qual[:len(read_to_align_seq)]
-    else:
-        read_to_align_seq, read_clipped_seq = read_suffix_seq, read_prefix_seq
-        trimmed_read_qual = read_qual[-len(read_to_align_seq):]
-    read_aligned_seq, ref_realigned_seq = align_read(
-        alignment, read_to_align_seq, fwd=fwd
-    )
-    read_cigar = compute_clipped_alignment_cigar(
-        read_aligned_seq, ref_realigned_seq,
-        read_clipped_seq, fwd=fwd
-    )
-    score = alignment.get_score()
-    NM = compute_alignment_NM(ref_realigned_seq, read_aligned_seq)
-    MD = compute_alignment_MD(ref_realigned_seq, read_aligned_seq)
-    return (
-        read_aligned_seq, trimmed_read_qual, ref_realigned_seq,
-        read_cigar, score, NM, MD
-    )
+# Auxiliary functions related to SAM files
 
 SAM_HEADER_SQ = dedent(
     f"""
@@ -311,6 +106,8 @@ def compute_flag(fwd=True, primary=True, unmapped=False):
         return (99 if primary else 355)
     return (147 if primary else 403)
 
+
+
 def alignment_to_sam(read_id, alignment, amplicon, fwd=True, primary=True):
     """
     Computes the SAM string for an aligned read
@@ -323,7 +120,12 @@ def alignment_to_sam(read_id, alignment, amplicon, fwd=True, primary=True):
     :param: primary (bool): True if first encountered alignment for the read
     :return: str: SAM string
     """
-    (read_aligned_seq, read_qual, ref_realigned_seq, read_cigar, score, NM, MD) = alignment
+    # Reading from alignment the elements required to realign a read
+    read_aligned_seq = alignment[0]
+    ref_realigned_seq = alignment[1]
+    read_qual, read_cigar = alignment[1], alignment[3]
+    score, NM, MD = alignment[4], alignment[5], alignment[6]
+    # Populating SAM fields
     QNAME = read_id
     FLAG = compute_flag(fwd=fwd, primary=primary, unmapped=False)
     RNAME = amplicon.get_chr()
@@ -343,7 +145,129 @@ def alignment_to_sam(read_id, alignment, amplicon, fwd=True, primary=True):
         QNAME, FLAG, RNAME, POS, MAPQ, CIGAR, RNEXT, PNEXT, TLEN, SEQ, QUAL,
         NM, MD, AS
     ]
-    return  '\t'.join([str(x) for x in SAM_fields])
+    SAM_str = '\t'.join([str(x) for x in SAM_fields])
+    return  SAM_str
+
+
+# Handling mapped merged reads
+# Main function: process_read generates the SAM entry for a pair of forward and
+# reverse read originating from a merged read
+
+def get_reads_info(read_id, fwd_fq_index, rev_fq_index):
+    """
+    Given a read ID and the index of the foward reads and reverse reads
+    returns the forward read sequence and the reverse complement of the reverse
+    read
+    :param: read_id (str): FASTQ read ID
+    :param: fwd_fq_index, rev_fq_index: indexes for the forward and
+    reverse reads files
+    :return: str, str, str, str: forward read sequence and quality, reverse
+    complement of the reverse read, reverse of the quality of the reverse read
+    """
+    fwd_record = fwd_fq_index[read_id]
+    fwd_seq = fwd_record.seq
+    fwd_qual = phred_to_str(fwd_record.letter_annotations["phred_quality"])
+    rev_record = rev_fq_index[read_id]
+    rev_seq = Seq.reverse_complement(rev_record.seq)
+    rev_qual_int = reversed(rev_record.letter_annotations["phred_quality"])
+    rev_qual = phred_to_str(rev_qual_int)
+    return fwd_seq, fwd_qual, rev_seq, rev_qual
+
+def trim_read_seq(cluster_seq, read_seq, fwd=True):
+    """
+    Separate a read into the part belonging to the merged read used to define
+    the cluster consensus sequence cluster_seq is trimmed.
+    If fwd is True, assumes read_seq is a forward read and the trimmed part is
+    a suffix.
+    If fwd is False, assumes read_seq is the reverse complement of a reverse
+    read and the trimmed part is a prefix.
+    :param: cluster_seq (str): cluster consensus sequence
+    :param: read_seq (str): read sequence
+    :param: fwd (bool): if True, read_sew is assumed to be a forward read
+    otherwise a reverse read.
+    :return: str, str: prefix, suffix of the trimmed read.
+    """
+    cluster_len, read_len = len(cluster_seq), len(read_seq)
+    common_len = min(cluster_len, read_len)
+    if fwd:
+        read_prefix_seq = read_seq[:common_len]
+        read_suffix_seq = read_seq[common_len:]
+    else:
+        read_prefix_seq = read_seq[:- common_len]
+        read_suffix_seq = read_seq[- common_len:]
+    return read_prefix_seq, read_suffix_seq
+
+def process_single_read(alignment, cluster_seq, read_seq, read_qual, fwd=True):
+    """ Given a read, an alignment and a cluster consensus sequence, realign
+    the read sequence according to the alignment and returns the aligned
+    sequences and the alignment cigar string.
+    :param: alignment (Alignment): cluster alignment
+    :param: cluster_seq (str): cluster consensus sequence
+    :param: read_seq (str): full read sequence
+    :param: read_qual (str): Phred quality string
+    :param: fwd (bool): True if forward read
+    :return: str, str, str, str: read aligned sequence, read quality over the
+    aligned part, reference realigned sequence, cigar string
+    """
+    read_prefix_seq, read_suffix_seq = trim_read_seq(
+        cluster_seq, read_seq, fwd=fwd
+    )
+    if fwd:
+        read_to_align_seq, read_clipped_seq = read_prefix_seq, read_suffix_seq
+        trimmed_read_qual = read_qual[:len(read_to_align_seq)]
+    else:
+        read_to_align_seq, read_clipped_seq = read_suffix_seq, read_prefix_seq
+        trimmed_read_qual = read_qual[-len(read_to_align_seq):]
+    read_alignment = align_single_read(alignment, read_to_align_seq, fwd=fwd)
+    read_aligned_seq = read_alignment.get_read()
+    ref_realigned_seq = read_alignment.get_amplicon()
+    read_cigar = compute_clipped_alignment_cigar(
+        ref_realigned_seq, read_aligned_seq, read_clipped_seq, fwd=fwd
+    )
+    score = read_alignment.get_score()
+    NM = compute_alignment_NM(ref_realigned_seq, read_aligned_seq)
+    MD = compute_alignment_MD(ref_realigned_seq, read_aligned_seq)
+    return (
+        read_aligned_seq, trimmed_read_qual, ref_realigned_seq,
+        read_cigar, score, NM, MD
+    )
+
+def process_merged_read(
+    alignment, cluster_seq, read_id, fwd_fq_index, rev_fq_index, primary=False
+):
+    """ Given a read_id, an alignment and a cluster consensus sequence, realign
+    the forward and reverse reads sequences according to the alignment and
+    returns the corresponding SAM strings.
+    :param: alignment (Alignment): cluster alignment
+    :param: cluster_seq (str): cluster consensus sequence
+    :param: read_id (str): ID of the merged read
+    :param:  fwd_fq_index, rev_fq_index: indexes for the forward and
+    reverse reads files
+    :return: str: SAM string, one per line, for the alignments of the forward
+    and reverse reads constrained by the alignment of the merged read
+    """
+    fwd_seq, fwd_qual, rev_seq, rev_qual = get_reads_info(
+        read_id, fwd_fq_index, rev_fq_index
+    )
+    fwd_alignment = process_single_read(
+        alignment, cluster_seq, fwd_seq, fwd_qual, fwd=True
+    )
+    rev_alignment = process_single_read(
+        alignment, cluster_seq, rev_seq, rev_qual, fwd=False
+    )
+    SAM_str = '\n' + alignment_to_sam(
+        read_id, fwd_alignment, amplicon,
+        fwd=True, primary=primary
+    )
+    SAM_str += '\n' + alignment_to_sam(
+        read_id, rev_alignment, amplicon,
+        fwd=False, primary=primary
+    )
+    return SAM_str
+
+# Handling unmapped (unmerged) reads
+# Main function: process_unmapped_read generates the SAM entry for the a pair of
+# forward and reverse reads that were not mapped from a merged read.
 
 def get_unmerged_reads_id(unmapped_reads_file):
     """
@@ -402,20 +326,26 @@ def process_unmapped_reads(unmapped_reads_file, fwd_fq_index, rev_fq_index):
         SAM_str += f"{unmapped_to_SAM(read_id, rev_seq, rev_qual, fwd=False)}"
     return SAM_str
 
+# Main function, currently aimed at testing the code.
 
 if __name__ == "__main__":
+    # Parameters
+    # Directory containing alignments and clusters text files, and fastq files
     DATA_DIR = sys.argv[1]
+    # List of samples to test the code on
     SAMPLES_FILE = os.path.join(DATA_DIR, 'samples.txt')
+    # List of amplicons to test the code on
     AMPLICONS_FILE = os.path.join(DATA_DIR, 'amplicons.txt')
+    # Amplicons manifest
     MANIFEST_FILE_NAME = 'CG001v4.0_Amplicon_Manifest_Panel4.0.3_20181101.tsv'
     MANIFEST_FILE_PATH = os.path.join(DATA_DIR, MANIFEST_FILE_NAME)
 
+    # Reading input data
     AMPLICON_MANIFEST = AmpliconsManifest(MANIFEST_FILE_PATH )
     SAMPLES_ID = [x.rstrip()  for x in open(SAMPLES_FILE, 'r').readlines()]
-    # SAMPLES_ID = []'DNA-11373-CG001Qv40Run17-10_S10']
     AMPLICONS_ID = [x.rstrip()  for x in open(AMPLICONS_FILE, 'r').readlines()]
-    # AMPLICONS_ID = ['CG001v4.0.56', 'CG001v4.0.6']
 
+    # Processing samples
     for sample_id in SAMPLES_ID:
         # Reading annotated FASTQ files
         FQ_FWD_FILE_NAME = f"{sample_id}_L001_R1_001_annotated.fq"
@@ -443,7 +373,7 @@ if __name__ == "__main__":
             alignments_file_path = os.path.join(DATA_DIR, alignments_file_name)
             alignments = AlignmentsSet.from_file(None, alignments_file_path)
             alignments_id = alignments.get_alignments_id()
-
+            # Loop on alignments in the alignments text file
             for cluster_id in clusters_id:
                 cluster = clusters.get_cluster(cluster_id)
                 cluster_seq = cluster.get_consensus_seq()
@@ -455,24 +385,12 @@ if __name__ == "__main__":
                     alignment = alignments.get_alignment(cluster_id, alg_id)
                     for read_id in reads_id:
                         primary = (reads_alg_count[read_id] == 0)
-                        fwd_seq, fwd_qual, rev_seq, rev_qual = get_reads_info(
-                            read_id, FQ_FWD, FQ_REV
-                        )
-                        fwd_alignment = process_read(
-                            alignment, cluster_seq, fwd_seq, fwd_qual, fwd=True
-                        )
-                        rev_alignment = process_read(
-                            alignment, cluster_seq, rev_seq, rev_qual, fwd=False
-                        )
-                        SAM_str += '\n' + alignment_to_sam(
-                            read_id, fwd_alignment, amplicon,
-                            fwd=True, primary=primary
-                        )
-                        SAM_str += '\n' + alignment_to_sam(
-                            read_id, rev_alignment, amplicon,
-                            fwd=False, primary=primary
+                        SAM_str += process_merged_read(
+                            alignment, cluster_seq, read_id,
+                            FQ_FWD, FQ_REV, primary=primary
                         )
                         reads_alg_count[read_id] += 1
+            # Processing unmapped reads
             unmapped_reads_file_name = (
                f"{sample_id}_{amplicon_id}_unmerged_reads.txt"
             )
@@ -484,6 +402,7 @@ if __name__ == "__main__":
             )
             SAM_out.write(SAM_str)
         SAM_out.close()
+        # Conversion of the temporary SAM file into a BAM file
         BAM_out_file_path = f"{SAM_out_file_path}.bam"
         samtools_view_cmd = SamtoolsViewCommandline(
             input_file=SAM_out_file_path,
