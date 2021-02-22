@@ -61,4 +61,7 @@ The modifications are the following:
   single read (forward or reverse) from the alignment of the corresponding
   merged read.
 
-The file bin/convert_alignments.py has been added. It takes
+The file bin/convert_alignments.py has been added. It takes as input the path to
+a directory containing the data for a set of samples (alignments and clusters
+text files and annotated fastq files) and generates a SAM and a BAM files for a
+set of samples and amplicons (one file of each type per sample).
