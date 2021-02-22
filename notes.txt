@@ -65,3 +65,10 @@ The file bin/convert_alignments.py has been added. It takes as input the path to
 a directory containing the data for a set of samples (alignments and clusters
 text files and annotated fastq files) and generates a SAM and a BAM files for a
 set of samples and amplicons (one file of each type per sample).
+
+6. Integration to the pipeline.
+The code in this repo will be integrated in the third part of the pipeline. This
+part currently focuses solely on filtering indel calls and generating annotated
+VCF files. The creation of BAM files will be integrated to this part, as it is
+not related to the core of the pipeline that is to compute merged reads,
+clusters, alignments and an initial set of detected variants. 
