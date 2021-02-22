@@ -4,7 +4,6 @@ Converting alignments text files into BAM files
 """
 
 # Standard imports
-from itertools import groupby
 import os
 from textwrap import dedent
 import sys
